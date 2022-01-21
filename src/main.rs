@@ -1,4 +1,3 @@
-use log::{debug, error};
 use std::collections::hash_map::*;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Seek, Write};
@@ -11,6 +10,9 @@ struct Args {
 
     #[structopt(default_value = "/usr/share/dict/words")]
     dictionary_path: String,
+
+    #[structopt(short = "v", long)]
+    verbose: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -38,7 +40,6 @@ enum Restriction {
 }
 
 fn main() -> io::Result<()> {
-    env_logger::init();
     let args = Args::from_args();
 
     let mut knowledge = Knowledge::new(args.num_letters);
@@ -46,8 +47,8 @@ fn main() -> io::Result<()> {
     let mut words_file = match File::open(&args.dictionary_path) {
         Ok(f) => f,
         Err(e) => {
-            error!("dictionary file {:?} could not be opened: {}", args.dictionary_path, e);
-            error!("to use a different file, specify it in command line arguments");
+            println!("dictionary file {:?} could not be opened: {}", args.dictionary_path, e);
+            println!("to use a different file, specify it in command line arguments");
             Args::clap().print_help().unwrap();
             println!();
             std::process::exit(1);
@@ -59,7 +60,7 @@ fn main() -> io::Result<()> {
     for res in BufReader::new(&mut words_file).lines() {
         let word = res?;
         // Knowledge is empty, so this just checks word length and letters against the alphabet.
-        if !knowledge.check_word(&word) {
+        if !knowledge.check_word(&word, args.verbose) {
             continue;
         }
         for c in word.chars() {
@@ -74,23 +75,24 @@ fn main() -> io::Result<()> {
         *v /= total_letters;
     }
 
-    // DEBUG
-    /*
-    let mut letters = letter_freq.iter().map(|(c, f)| (*c, *f)).collect::<Vec<(char, f64)>>();
-    letters.sort_unstable_by(|(_, f1), (_, f2)| f2.partial_cmp(f1).unwrap());
-    println!("letter frequency:");
-    for (letter, freq) in &letters {
-        println!("\t('{}', {})", letter, freq);
+    if args.verbose {
+        let mut letters = letter_freq.iter().map(|(c, f)| (*c, *f)).collect::<Vec<(char, f64)>>();
+        letters.sort_unstable_by(|(_, f1), (_, f2)| f2.partial_cmp(f1).unwrap());
+        eprintln!("letter frequency:");
+        for (letter, freq) in &letters {
+            eprintln!("\t('{}', {})", letter, freq);
+        }
     }
-    */
 
     loop {
         let mut candidates = vec![];
         for res in BufReader::new(&mut words_file).lines() {
             let word = res?;
 
-            if knowledge.check_word(&word) {
-                debug!("adding {}", word);
+            if knowledge.check_word(&word, args.verbose) {
+                if args.verbose {
+                    eprintln!("adding {}", word);
+                }
                 candidates.push(word);
             }
         }
@@ -162,7 +164,7 @@ fn main() -> io::Result<()> {
                     continue;
                 }
                 Ok(infos) => {
-                    if let Err(e) = knowledge.add_infos(infos) {
+                    if let Err(e) = knowledge.add_infos(infos, args.verbose) {
                         println!("Bad input: {}", e);
                         continue;
                     }
@@ -234,7 +236,7 @@ impl Knowledge {
         }
     }
 
-    fn add_info(&mut self, idx: usize, info: &Info) -> Result<(), String> {
+    fn add_info(&mut self, idx: usize, info: &Info, verbose: bool) -> Result<(), String> {
         match info {
             Info::Exact(c) => {
                 if let Restriction::Exact(x) = &self.restrictions[idx] {
@@ -260,14 +262,18 @@ impl Knowledge {
                 for r in self.restrictions.iter_mut() {
                     if let Restriction::Not(list) = r {
                         if list.iter().any(|x| x == c) {
-                            debug!("not adding restriction against {}; already have one somewhere", c);
+                            if verbose {
+                                eprintln!("not adding restriction against {}; already have one somewhere", c);
+                            }
                             add = false;
                             break;
                         }
                     }
                 }
                 if add {
-                    debug!("adding restriction against {}", c);
+                    if verbose {
+                        eprintln!("adding restriction against {}", c);
+                    }
                     for r in self.restrictions.iter_mut() {
                         if let Restriction::Not(list) = r {
                             if !list.iter().any(|x| x == c) {
@@ -281,12 +287,12 @@ impl Knowledge {
         Ok(())
     }
 
-    pub fn add_infos(&mut self, infos: Vec<Info>) -> Result<(), String> {
+    pub fn add_infos(&mut self, infos: Vec<Info>, verbose: bool) -> Result<(), String> {
         let mut k2 = self.clone();
         let mut must = HashMap::new();
 
         for (i, info) in infos.iter().enumerate() {
-            k2.add_info(i, info)?;
+            k2.add_info(i, info, verbose)?;
             match info {
                 Info::Somewhere(c) | Info::Exact(c) => {
                     *must.entry(c).or_insert(0) += 1;
@@ -309,12 +315,12 @@ impl Knowledge {
         Ok(())
     }
 
-    pub fn check_word(&self, word: &str) -> bool {
+    pub fn check_word(&self, word: &str, verbose: bool) -> bool {
         if word.chars().count() != self.restrictions.len() {
             return false;
         }
 
-        for (c, r) in word.chars().zip(self.restrictions.iter()) {
+        for (i, (c, r)) in word.chars().zip(self.restrictions.iter()).enumerate() {
             if !('a'..='z').contains(&c) {
                 return false;
             }
@@ -324,14 +330,18 @@ impl Knowledge {
                 Restriction::Not(letters) => letters.iter().all(|&l| l != c),
             };
             if !matches {
-                debug!("{}: {} violates {:?}", word, c, r);
+                if verbose {
+                    eprintln!("{}: {} violates {:?} at {}", word, c, r, i);
+                }
                 return false;
             }
         }
 
         for (&c, &count) in &self.must_have {
             if word.chars().filter(|&x| x == c).count() < count {
-                debug!("{}: lacks required letter {} ({} times)", word, c, count);
+                if verbose {
+                    eprintln!("{}: lacks required letter {} ({} times)", word, c, count);
+                }
                 return false;
             }
         }
@@ -354,34 +364,34 @@ mod test {
             No('i'),
             No('e'),
             No('u'),
-        ])?;
-        assert!(k.check_word("thorn"));
+        ], true)?;
+        assert!(k.check_word("thorn", true));
         k.add_infos(vec![
             Somewhere('t'),
             No('h'),
             Somewhere('o'),
             Somewhere('r'),
             No('n'),
-        ])?;
-        assert!(k.check_word("sorts"));
+        ], true)?;
+        assert!(k.check_word("sorts", true));
         k.add_infos(vec![
             No('s'),
             Exact('o'),
             Somewhere('r'),
             Somewhere('t'),
             No('s'),
-        ])?;
-        assert!(!k.check_word("palmy"));
+        ], true)?;
+        assert!(!k.check_word("palmy", true));
         k.add_infos(vec![
             No('p'),
             No('a'),
             No('l'),
             No('m'),
             No('y'),
-        ])?;
+        ], true)?;
         eprintln!("{:#?}", k);
-        assert!(k.check_word("robot"));
-        assert!(!k.check_word("motor"));
+        assert!(k.check_word("robot", true));
+        assert!(!k.check_word("motor", true));
         Ok(())
     }
 
@@ -402,8 +412,8 @@ mod test {
             Exact('o'),
             No('n'),
             No('s'),
-        ])?;
-        assert!(k.check_word("archaeology"));
+        ], true)?;
+        assert!(k.check_word("archaeology", true));
         Ok(())
     }
 
@@ -429,8 +439,8 @@ mod test {
     #[test]
     fn test_11_2() -> Result<(), String> {
         let mut k = Knowledge::new(11);
-        k.add_infos(parse_input("?u!l*c!e?r!a!t?i*o?n*s", 11)?)?;
-        assert!(k.check_word("incongruous"));
+        k.add_infos(parse_input("?u!l*c!e?r!a!t?i*o?n*s", 11)?, true)?;
+        assert!(k.check_word("incongruous", true));
         Ok(())
     }
 
@@ -438,12 +448,12 @@ mod test {
     fn test_11_3() -> Result<(), String> {
         let mut k = Knowledge::new(11);
         // symptomatic / masochistic
-        k.add_infos(parse_input("!u!l?c!e!r?a?t?i?o!n?s", 11)?)?;
-        assert!(k.check_word("symptomatic"));
-        assert!(k.check_word("masochistic"));
-        k.add_infos(parse_input("?s!y?m!p!t?o!m?a*t*i*c", 11)?)?;
-        assert!(!k.check_word("symptomatic"));
-        assert!(k.check_word("masochistic"));
+        k.add_infos(parse_input("!u!l?c!e!r?a?t?i?o!n?s", 11)?, true)?;
+        assert!(k.check_word("symptomatic", true));
+        assert!(k.check_word("masochistic", true));
+        k.add_infos(parse_input("?s!y?m!p!t?o!m?a*t*i*c", 11)?, true)?;
+        assert!(!k.check_word("symptomatic", true));
+        assert!(k.check_word("masochistic", true));
         Ok(())
     }
 
@@ -451,13 +461,13 @@ mod test {
     fn test_11_4() -> Result<(), String> {
         let mut k = Knowledge::new(11);
         // symptomatic / masochistic
-        k.add_infos(parse_input("!u!l?c!e!r?a?t?i?o!n?s", 11)?)?;
-        assert!(k.check_word("symptomatic"));
-        assert!(k.check_word("masochistic"));
+        k.add_infos(parse_input("!u!l?c!e!r?a?t?i?o!n?s", 11)?, true)?;
+        assert!(k.check_word("symptomatic", true));
+        assert!(k.check_word("masochistic", true));
         //k.add_infos(parse_input("?s!y?m!p!t?o!m?a*t*i*c", 11)?)?;
-        k.add_infos(parse_input("?m?a?s?o!c!h!i!s*t*i*c", 11)?)?;
-        assert!(k.check_word("symptomatic"));
-        assert!(!k.check_word("masochistic"));
+        k.add_infos(parse_input("?m?a?s?o!c!h!i!s*t*i*c", 11)?, true)?;
+        assert!(k.check_word("symptomatic", true));
+        assert!(!k.check_word("masochistic", true));
         Ok(())
     }
 }
