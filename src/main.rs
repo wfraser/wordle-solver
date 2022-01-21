@@ -1,5 +1,5 @@
 use log::{debug, error};
-use std::collections::BTreeSet;
+use std::collections::{HashSet, HashMap};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Seek, Write};
 use structopt::StructOpt;
@@ -52,9 +52,8 @@ fn main() -> io::Result<()> {
     env_logger::init();
     let args = Args::from_args();
 
-    let mut alphabet = BTreeSet::from_iter(LETTER_FREQ.iter().map(|(c, _)| c).cloned());
     let mut restrictions = vec![Restriction::Not(vec![]); args.num_letters];
-    let mut must = vec![];
+    let mut must = HashMap::<char, usize>::new();
 
     let mut words_file = match File::open(&args.dictionary_path) {
         Ok(f) => f,
@@ -76,9 +75,8 @@ fn main() -> io::Result<()> {
             }
 
             for (c, r) in word.chars().zip(restrictions.iter()) {
-                if !alphabet.contains(&c) {
-                    debug!("{}: {} not in alphabet", word, c);
-                    continue 'word;
+                if !('a'..='z').contains(&c) {
+                    continue;
                 }
 
                 let matches = match r {
@@ -91,9 +89,9 @@ fn main() -> io::Result<()> {
                 }
             }
 
-            for &m in &must {
-                if word.chars().all(|c| c != m) {
-                    debug!("{}: lacks required letter {}", word, m);
+            for (&c, &count) in &must {
+                if word.chars().filter(|&x| x == c).count() < count {
+                    debug!("{}: lacks required letter {} ({} times)", word, c, count);
                     continue 'word;
                 }
             }
@@ -112,7 +110,7 @@ fn main() -> io::Result<()> {
         let mut by_letters = candidates
             .iter()
             .map(|word| {
-                (word.clone(), BTreeSet::from_iter(word.chars()).len())
+                (word.clone(), HashSet::<char>::from_iter(word.chars()).len())
             })
             .collect::<Vec<_>>();
         by_letters.sort_unstable_by(|(_word1, count1), (_word2, count2)| count2.cmp(count1));
@@ -151,7 +149,7 @@ fn main() -> io::Result<()> {
             if inp.is_empty() {
                 return Ok(());
             }
-            if let Err(e) = parse_input(&inp, args.num_letters, &mut alphabet, &mut restrictions, &mut must) {
+            if let Err(e) = parse_input(&inp, args.num_letters, &mut restrictions, &mut must) {
                 println!("Input error: {}", e);
                 continue;
             }
@@ -182,7 +180,7 @@ fn print_words<T: AsRef<str>>(msg: &str, words: impl Iterator<Item=T>) {
     }
 }
 
-fn parse_input(inp: &str, num_letters: usize, alphabet: &mut BTreeSet<char>, restrictions: &mut Vec<Restriction>, must: &mut Vec<char>) -> Result<(), String> {
+fn parse_input(inp: &str, num_letters: usize, restrictions: &mut Vec<Restriction>, must: &mut HashMap<char, usize>) -> Result<(), String> {
     let mut flag = '\0';
     let mut idx = 0;
     for c in inp.chars() {
@@ -204,6 +202,7 @@ fn parse_input(inp: &str, num_letters: usize, alphabet: &mut BTreeSet<char>, res
                     }
                 }
                 restrictions[idx] = Restriction::Exact(c);
+                *must.entry(c).or_insert(0) += 1;
             }
             '?' => {
                 match &mut restrictions[idx] {
@@ -214,11 +213,37 @@ fn parse_input(inp: &str, num_letters: usize, alphabet: &mut BTreeSet<char>, res
                         list.push(c);
                     }
                 }
-                must.push(c);
+                *must.entry(c).or_insert(0) += 1;
             }
             '!' => {
-                alphabet.remove(&c);
-                // ignore result; it's okay if the letter was already not in the alphabet
+                let mut add = true;
+                for r in restrictions.iter_mut() {
+                    match r {
+                        Restriction::Not(list) => {
+                            if list.iter().find(|&&x| x == c).is_some() {
+                                debug!("not adding restriction against {}; already have one somewhere", c);
+                                add = false;
+                                break;
+                            }
+                        }
+                        /*Restriction::Exact(x) if x == c => {
+                            debug!("not adding restriction against {}; already required somewhere");
+                            add = false;
+                            break;
+                        }*/
+                        _ => (),
+                    }
+                }
+                if add {
+                    debug!("adding restriction against {}", c);
+                    for r in restrictions.iter_mut() {
+                        if let Restriction::Not(list) = r {
+                            if list.iter().find(|&&x| x == c).is_none() {
+                                list.push(c);
+                            }
+                        }
+                    }
+                }
             }
             _ => {
                 return Err(format!("unknown annotation {:?}", flag));
