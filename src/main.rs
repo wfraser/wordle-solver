@@ -1,5 +1,4 @@
 use log::{debug, error};
-use std::collections::HashSet;
 use std::collections::hash_map::*;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Seek, Write};
@@ -43,7 +42,7 @@ struct Args {
     dictionary_path: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum Info {
     /// Green letters
     Exact(char),
@@ -105,7 +104,10 @@ fn main() -> io::Result<()> {
         let mut by_letters = candidates
             .iter()
             .map(|word| {
-                (word.clone(), HashSet::<char>::from_iter(word.chars()).len())
+                let mut letters = word.chars().collect::<Vec<_>>();
+                letters.sort_unstable();
+                letters.dedup();
+                (word.clone(), letters.len())
             })
             .collect::<Vec<_>>();
         by_letters.sort_unstable_by(|(_word1, count1), (_word2, count2)| count2.cmp(count1));
@@ -114,7 +116,7 @@ fn main() -> io::Result<()> {
 
         if most_unique_letters.len() > 1 {
             let mut by_freq = most_unique_letters
-                .into_iter()
+                .iter()
                 .map(|(word, _count)| {
                     (word, word.chars()
                         .map(|c| LETTER_FREQ.iter().find(|(l, _f)| *l == c).unwrap().1)
@@ -136,7 +138,7 @@ fn main() -> io::Result<()> {
         }
 
         loop {
-            print!("Type the guess you made. Annotate each letter with: green=*, yellow=?, gray=!: ");
+            print!("Type the guess you made. Prefix each letter with: green=*, yellow=?, gray=!: ");
             io::stdout().flush()?;
             let mut inp = String::new();
             io::stdin().read_line(&mut inp)?;
@@ -150,15 +152,6 @@ fn main() -> io::Result<()> {
                     continue;
                 }
                 Ok(infos) => {
-                    /*
-                    let mut k2 = knowledge.clone();
-                    for (i, info) in infos.iter().enumerate() {
-                        if let Err(e) = k2.add_info(i, info) {
-                            println!("Bad input: {}", e);
-                            continue 'input;
-                        }
-                    }
-                    knowledge = k2;*/
                     if let Err(e) = knowledge.add_infos(infos) {
                         println!("Bad input: {}", e);
                         continue;
@@ -255,27 +248,19 @@ impl Knowledge {
             Info::No(c) => {
                 let mut add = true;
                 for r in self.restrictions.iter_mut() {
-                    match r {
-                        Restriction::Not(list) => {
-                            if list.iter().find(|&&x| x == *c).is_some() {
-                                debug!("not adding restriction against {}; already have one somewhere", c);
-                                add = false;
-                                break;
-                            }
-                        }
-                        /*Restriction::Exact(x) if x == c => {
-                            debug!("not adding restriction against {}; already required somewhere");
+                    if let Restriction::Not(list) = r {
+                        if list.iter().any(|x| x == c) {
+                            debug!("not adding restriction against {}; already have one somewhere", c);
                             add = false;
                             break;
-                        }*/
-                        _ => (),
+                        }
                     }
                 }
                 if add {
                     debug!("adding restriction against {}", c);
                     for r in self.restrictions.iter_mut() {
                         if let Restriction::Not(list) = r {
-                            if list.iter().find(|&&x| x == *c).is_none() {
+                            if !list.iter().any(|x| x == c) {
                                 list.push(*c);
                             }
                         }
@@ -345,12 +330,12 @@ impl Knowledge {
     }
 }
 
+#[cfg(test)]
 mod test {
     use super::*;
 
     #[test]
-    fn test_1() -> Result<(), String> {
-        env_logger::init();
+    fn test_5() -> Result<(), String> {
         use Info::*;
         let mut k = Knowledge::new(5);
         k.add_infos(vec![
@@ -387,6 +372,82 @@ mod test {
         eprintln!("{:#?}", k);
         assert!(k.check_word("robot"));
         assert!(!k.check_word("motor"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_11_1() -> Result<(), String> {
+        use Info::*;
+        let mut k = Knowledge::new(11);
+        // !u?l*c?e?r?a!t!i*o!n!s
+        k.add_infos(vec![
+            No('u'),
+            Somewhere('l'),
+            Exact('c'),
+            Somewhere('e'),
+            Somewhere('r'),
+            Somewhere('a'),
+            No('t'),
+            No('i'),
+            Exact('o'),
+            No('n'),
+            No('s'),
+        ])?;
+        assert!(k.check_word("archaeology"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse() {
+        use Info::*;
+        assert_eq!(parse_input("!u?l*c?e?r?a!t!i*o!n!s", 11),
+            Ok(vec![
+                No('u'),
+                Somewhere('l'),
+                Exact('c'),
+                Somewhere('e'),
+                Somewhere('r'),
+                Somewhere('a'),
+                No('t'),
+                No('i'),
+                Exact('o'),
+                No('n'),
+                No('s'),
+            ]));
+    }
+
+    #[test]
+    fn test_11_2() -> Result<(), String> {
+        let mut k = Knowledge::new(11);
+        k.add_infos(parse_input("?u!l*c!e?r!a!t?i*o?n*s", 11)?)?;
+        assert!(k.check_word("incongruous"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_11_3() -> Result<(), String> {
+        let mut k = Knowledge::new(11);
+        // symptomatic / masochistic
+        k.add_infos(parse_input("!u!l?c!e!r?a?t?i?o!n?s", 11)?)?;
+        assert!(k.check_word("symptomatic"));
+        assert!(k.check_word("masochistic"));
+        k.add_infos(parse_input("?s!y?m!p!t?o!m?a*t*i*c", 11)?)?;
+        assert!(!k.check_word("symptomatic"));
+        assert!(k.check_word("masochistic"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_11_4() -> Result<(), String> {
+        let mut k = Knowledge::new(11);
+        // symptomatic / masochistic
+        k.add_infos(parse_input("!u!l?c!e!r?a?t?i?o!n?s", 11)?)?;
+        assert!(k.check_word("symptomatic"));
+        assert!(k.check_word("masochistic"));
+        //k.add_infos(parse_input("?s!y?m!p!t?o!m?a*t*i*c", 11)?)?;
+        k.add_infos(parse_input("?m?a?s?o!c!h!i!s*t*i*c", 11)?)?;
+        assert!(k.check_word("symptomatic"));
+        assert!(!k.check_word("masochistic"));
         Ok(())
     }
 }
