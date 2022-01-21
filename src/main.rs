@@ -1,5 +1,6 @@
 use log::{debug, error};
-use std::collections::{HashSet, HashMap};
+use std::collections::HashSet;
+use std::collections::hash_map::*;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Seek, Write};
 use structopt::StructOpt;
@@ -43,6 +44,24 @@ struct Args {
 }
 
 #[derive(Debug, Clone)]
+enum Info {
+    /// Green letters
+    Exact(char),
+
+    /// Yellow letters
+    Somewhere(char),
+
+    /// Gray letters
+    No(char),
+}
+
+#[derive(Debug, Clone)]
+struct Knowledge {
+    restrictions: Vec<Restriction>,
+    must_have: HashMap<char, usize>,
+}
+
+#[derive(Debug, Clone)]
 enum Restriction {
     Exact(char),
     Not(Vec<char>),
@@ -52,8 +71,7 @@ fn main() -> io::Result<()> {
     env_logger::init();
     let args = Args::from_args();
 
-    let mut restrictions = vec![Restriction::Not(vec![]); args.num_letters];
-    let mut must = HashMap::<char, usize>::new();
+    let mut knowledge = Knowledge::new(args.num_letters);
 
     let mut words_file = match File::open(&args.dictionary_path) {
         Ok(f) => f,
@@ -65,39 +83,16 @@ fn main() -> io::Result<()> {
             std::process::exit(1);
         }
     };
+
     loop {
         let mut candidates = vec![];
-        'word: for res in BufReader::new(&mut words_file).lines() {
+        for res in BufReader::new(&mut words_file).lines() {
             let word = res?;
 
-            if word.chars().count() != args.num_letters {
-                continue 'word;
+            if knowledge.check_word(&word) {
+                debug!("adding {}", word);
+                candidates.push(word);
             }
-
-            for (c, r) in word.chars().zip(restrictions.iter()) {
-                if !('a'..='z').contains(&c) {
-                    continue;
-                }
-
-                let matches = match r {
-                    Restriction::Exact(letter) => c == *letter,
-                    Restriction::Not(letters) => letters.iter().all(|&l| l != c),
-                };
-                if !matches {
-                    debug!("{}: {} violates {:?}", word, c, r);
-                    continue 'word;
-                }
-            }
-
-            for (&c, &count) in &must {
-                if word.chars().filter(|&x| x == c).count() < count {
-                    debug!("{}: lacks required letter {} ({} times)", word, c, count);
-                    continue 'word;
-                }
-            }
-            
-            debug!("adding {}", word);
-            candidates.push(word);
         }
 
         if candidates.is_empty() {
@@ -149,9 +144,26 @@ fn main() -> io::Result<()> {
             if inp.is_empty() {
                 return Ok(());
             }
-            if let Err(e) = parse_input(&inp, args.num_letters, &mut restrictions, &mut must) {
-                println!("Input error: {}", e);
-                continue;
+            match parse_input(&inp, args.num_letters) {
+                Err(e) => {
+                    println!("Input error: {}", e);
+                    continue;
+                }
+                Ok(infos) => {
+                    /*
+                    let mut k2 = knowledge.clone();
+                    for (i, info) in infos.iter().enumerate() {
+                        if let Err(e) = k2.add_info(i, info) {
+                            println!("Bad input: {}", e);
+                            continue 'input;
+                        }
+                    }
+                    knowledge = k2;*/
+                    if let Err(e) = knowledge.add_infos(infos) {
+                        println!("Bad input: {}", e);
+                        continue;
+                    }
+                }
             }
             break;
         }
@@ -180,11 +192,11 @@ fn print_words<T: AsRef<str>>(msg: &str, words: impl Iterator<Item=T>) {
     }
 }
 
-fn parse_input(inp: &str, num_letters: usize, restrictions: &mut Vec<Restriction>, must: &mut HashMap<char, usize>) -> Result<(), String> {
+fn parse_input(inp: &str, num_letters: usize) -> Result<Vec<Info>, String> {
     let mut flag = '\0';
-    let mut idx = 0;
+    let mut infos = vec![];
     for c in inp.chars() {
-        if idx >= num_letters {
+        if infos.len() == num_letters {
             return Err("too many letters in input".to_owned());
         }
         if c.is_whitespace() {
@@ -194,33 +206,58 @@ fn parse_input(inp: &str, num_letters: usize, restrictions: &mut Vec<Restriction
             flag = c;
             continue;
         }
-        match flag {
-            '*' => {
-                if let Restriction::Exact(x) = restrictions[idx] {
+        let info = match flag {
+            '*' => Info::Exact(c),
+            '?' => Info::Somewhere(c),
+            '!' => Info::No(c),
+            _ => {
+                return Err(format!("unknown annotation {:?}", flag));
+            }
+        };
+        infos.push(info);
+        flag = '\0';
+    }
+    if flag != '\0' {
+        return Err(format!("unprocessed input {:?}", flag));
+    }
+    Ok(infos)
+}
+
+impl Knowledge {
+    pub fn new(num_letters: usize) -> Self {
+        Self {
+            restrictions: vec![Restriction::Not(vec![]); num_letters],
+            must_have: HashMap::new(),
+        }
+    }
+
+    fn add_info(&mut self, idx: usize, info: &Info) -> Result<(), String> {
+        match info {
+            Info::Exact(c) => {
+                if let Restriction::Exact(x) = &self.restrictions[idx] {
                     if x != c {
                         return Err(format!("you already said that letter {} is {:?}", idx, x));
                     }
                 }
-                restrictions[idx] = Restriction::Exact(c);
-                *must.entry(c).or_insert(0) += 1;
+                self.restrictions[idx] = Restriction::Exact(*c);
             }
-            '?' => {
-                match &mut restrictions[idx] {
+            Info::Somewhere(c) => {
+                match &mut self.restrictions[idx] {
                     Restriction::Exact(x) => {
                         return Err(format!("you already said that letter {} is {:?}", idx, x));
                     }
                     Restriction::Not(list) => {
-                        list.push(c);
+                        list.push(*c);
                     }
                 }
-                *must.entry(c).or_insert(0) += 1;
+                *self.must_have.entry(*c).or_insert(0) += 1;
             }
-            '!' => {
+            Info::No(c) => {
                 let mut add = true;
-                for r in restrictions.iter_mut() {
+                for r in self.restrictions.iter_mut() {
                     match r {
                         Restriction::Not(list) => {
-                            if list.iter().find(|&&x| x == c).is_some() {
+                            if list.iter().find(|&&x| x == *c).is_some() {
                                 debug!("not adding restriction against {}; already have one somewhere", c);
                                 add = false;
                                 break;
@@ -236,24 +273,120 @@ fn parse_input(inp: &str, num_letters: usize, restrictions: &mut Vec<Restriction
                 }
                 if add {
                     debug!("adding restriction against {}", c);
-                    for r in restrictions.iter_mut() {
+                    for r in self.restrictions.iter_mut() {
                         if let Restriction::Not(list) = r {
-                            if list.iter().find(|&&x| x == c).is_none() {
-                                list.push(c);
+                            if list.iter().find(|&&x| x == *c).is_none() {
+                                list.push(*c);
                             }
                         }
                     }
                 }
             }
-            _ => {
-                return Err(format!("unknown annotation {:?}", flag));
+        }
+        Ok(())
+    }
+
+    pub fn add_infos(&mut self, infos: Vec<Info>) -> Result<(), String> {
+        let mut k2 = self.clone();
+        let mut must = HashMap::new();
+
+        for (i, info) in infos.iter().enumerate() {
+            k2.add_info(i, info)?;
+            match info {
+                Info::Somewhere(c) | Info::Exact(c) => {
+                    *must.entry(c).or_insert(0) += 1;
+                }
+                _ => (),
             }
         }
-        idx += 1;
-        flag = '\0';
+
+        for (c, num) in must.into_iter() {
+            match k2.must_have.entry(*c) {
+                Entry::Occupied(mut entry) => {
+                    entry.insert((*entry.get()).min(num));
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(num);
+                }
+            }
+        }
+        *self = k2;
+        Ok(())
     }
-    if flag != '\0' {
-        return Err(format!("unprocessed input {:?}", flag));
+
+    pub fn check_word(&self, word: &str) -> bool {
+        if word.chars().count() != self.restrictions.len() {
+            return false;
+        }
+
+        for (c, r) in word.chars().zip(self.restrictions.iter()) {
+            if !('a'..='z').contains(&c) {
+                return false;
+            }
+
+            let matches = match r {
+                Restriction::Exact(letter) => c == *letter,
+                Restriction::Not(letters) => letters.iter().all(|&l| l != c),
+            };
+            if !matches {
+                debug!("{}: {} violates {:?}", word, c, r);
+                return false;
+            }
+        }
+
+        for (&c, &count) in &self.must_have {
+            if word.chars().filter(|&x| x == c).count() < count {
+                debug!("{}: lacks required letter {} ({} times)", word, c, count);
+                return false;
+            }
+        }
+
+        true
     }
-    Ok(())
+}
+
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_1() -> Result<(), String> {
+        env_logger::init();
+        use Info::*;
+        let mut k = Knowledge::new(5);
+        k.add_infos(vec![
+            No('a'),
+            No('d'),
+            No('i'),
+            No('e'),
+            No('u'),
+        ])?;
+        assert!(k.check_word("thorn"));
+        k.add_infos(vec![
+            Somewhere('t'),
+            No('h'),
+            Somewhere('o'),
+            Somewhere('r'),
+            No('n'),
+        ])?;
+        assert!(k.check_word("sorts"));
+        k.add_infos(vec![
+            No('s'),
+            Exact('o'),
+            Somewhere('r'),
+            Somewhere('t'),
+            No('s'),
+        ])?;
+        assert!(!k.check_word("palmy"));
+        k.add_infos(vec![
+            No('p'),
+            No('a'),
+            No('l'),
+            No('m'),
+            No('y'),
+        ])?;
+        eprintln!("{:#?}", k);
+        assert!(k.check_word("robot"));
+        assert!(!k.check_word("motor"));
+        Ok(())
+    }
 }
