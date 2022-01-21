@@ -119,7 +119,22 @@ fn main() -> io::Result<()> {
                 .iter()
                 .map(|(word, _count)| {
                     (word, word.chars()
-                        .map(|c| LETTER_FREQ.iter().find(|(l, _f)| *l == c).unwrap().1)
+                        .map(|c| {
+                            // Letters we already have knowledge about count for zero.
+                            if knowledge.must_have.iter().any(|(&x, _)| x == c)
+                                || knowledge.restrictions.iter().any(|r| {
+                                    match r {
+                                        Restriction::Not(v) => v.iter().any(|&x| x == c),
+                                        Restriction::Exact(x) => *x == c,
+                                    }
+                                })
+                            {
+                                0.
+                            } else {
+                                // Otherwise add up the English letter frequency
+                                LETTER_FREQ.iter().find(|(l, _f)| *l == c).unwrap().1
+                            }
+                        })
                         .sum::<f64>())
                 })
                 .collect::<Vec<_>>();
