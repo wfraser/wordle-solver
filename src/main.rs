@@ -4,6 +4,10 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Seek, Write};
 use structopt::StructOpt;
 
+/// Frequency of letters in English vocabulary.
+/// sourced from https://www3.nd.edu/~busiforc/handouts/cryptography/letterfrequencies.html
+/// based on the Concise Oxford Dictionary, 9th edition, 1995.
+/// TODO: build this from the dictionary instead, using only N-letter words.
 const LETTER_FREQ: [(char, f64); 26] = [
     ('e', 0.111607),
     ('a', 0.084966),
@@ -70,6 +74,7 @@ fn main() -> io::Result<()> {
     env_logger::init();
     let args = Args::from_args();
 
+    let letter_freq = HashMap::<char, f64>::from_iter(LETTER_FREQ.iter().cloned());
     let mut knowledge = Knowledge::new(args.num_letters);
 
     let mut words_file = match File::open(&args.dictionary_path) {
@@ -118,7 +123,7 @@ fn main() -> io::Result<()> {
             let mut by_freq = most_unique_letters
                 .iter()
                 .map(|(word, _count)| {
-                    (word, word.chars()
+                    let score = word.chars()
                         .map(|c| {
                             // Letters we already have knowledge about count for zero.
                             if knowledge.must_have.iter().any(|(&x, _)| x == c)
@@ -132,20 +137,14 @@ fn main() -> io::Result<()> {
                                 0.
                             } else {
                                 // Otherwise add up the English letter frequency
-                                LETTER_FREQ.iter().find(|(l, _f)| *l == c).unwrap().1
+                                letter_freq[&c]
                             }
                         })
-                        .sum::<f64>())
+                        .sum::<f64>();
+                    (word, score)
                 })
                 .collect::<Vec<_>>();
-            by_freq.sort_unstable_by(|(_word1, score1), (_word2, score2)| {
-                use std::cmp::Ordering::*;
-                if score1 > score2 {
-                    Less
-                } else {
-                    Greater
-                }
-            });
+            by_freq.sort_unstable_by(|(_, f1), (_, f2)| f2.partial_cmp(f1).unwrap());
             print_words("most unique letters, sorted by letter frequency",
                 by_freq.iter().map(|(word, score)| format!("\n\t({}, {})", word, score)));
         } else {
