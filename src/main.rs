@@ -4,39 +4,6 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Seek, Write};
 use structopt::StructOpt;
 
-/// Frequency of letters in English vocabulary.
-/// sourced from https://www3.nd.edu/~busiforc/handouts/cryptography/letterfrequencies.html
-/// based on the Concise Oxford Dictionary, 9th edition, 1995.
-/// TODO: build this from the dictionary instead, using only N-letter words.
-const LETTER_FREQ: [(char, f64); 26] = [
-    ('e', 0.111607),
-    ('a', 0.084966),
-    ('r', 0.075809),
-    ('i', 0.075448),
-    ('o', 0.071635),
-    ('t', 0.069509),
-    ('n', 0.066544),
-    ('s', 0.057351),
-    ('l', 0.054893),
-    ('c', 0.045388),
-    ('u', 0.036308),
-    ('d', 0.033844),
-    ('p', 0.031671),
-    ('m', 0.030129),
-    ('h', 0.030034),
-    ('g', 0.024705),
-    ('b', 0.020720),
-    ('f', 0.018121),
-    ('y', 0.017779),
-    ('w', 0.012899),
-    ('k', 0.011016),
-    ('v', 0.010074),
-    ('x', 0.002902),
-    ('z', 0.002722),
-    ('j', 0.001965),
-    ('q', 0.001962),
-];
-
 #[derive(Debug, StructOpt)]
 struct Args {
     #[structopt(default_value = "5")]
@@ -74,7 +41,6 @@ fn main() -> io::Result<()> {
     env_logger::init();
     let args = Args::from_args();
 
-    let letter_freq = HashMap::<char, f64>::from_iter(LETTER_FREQ.iter().cloned());
     let mut knowledge = Knowledge::new(args.num_letters);
 
     let mut words_file = match File::open(&args.dictionary_path) {
@@ -87,6 +53,36 @@ fn main() -> io::Result<()> {
             std::process::exit(1);
         }
     };
+
+    // Build a map of letters to how often they occur in N-letter words.
+    let mut letter_freq = HashMap::<char, f64>::new();
+    for res in BufReader::new(&mut words_file).lines() {
+        let word = res?;
+        // Knowledge is empty, so this just checks word length and letters against the alphabet.
+        if !knowledge.check_word(&word) {
+            continue;
+        }
+        for c in word.chars() {
+            *letter_freq.entry(c).or_insert(0.) += 1.;
+        }
+    }
+    words_file.rewind()?;
+
+    // Normalize by total number of letters.
+    let total_letters = letter_freq.iter().map(|(_c, count)| count).sum::<f64>();
+    for v in letter_freq.values_mut() {
+        *v /= total_letters;
+    }
+
+    // DEBUG
+    /*
+    let mut letters = letter_freq.iter().map(|(c, f)| (*c, *f)).collect::<Vec<(char, f64)>>();
+    letters.sort_unstable_by(|(_, f1), (_, f2)| f2.partial_cmp(f1).unwrap());
+    println!("letter frequency:");
+    for (letter, freq) in &letters {
+        println!("\t('{}', {})", letter, freq);
+    }
+    */
 
     loop {
         let mut candidates = vec![];
