@@ -198,7 +198,7 @@ fn print_words<T: AsRef<str>>(msg: &str, words: impl Iterator<Item=T>) {
 }
 
 fn parse_input(inp: &str, num_letters: usize) -> Result<Vec<Info>, String> {
-    let mut flag = '\0';
+    let mut flag = None;
     let mut infos = vec![];
     for c in inp.chars() {
         if infos.len() == num_letters {
@@ -207,23 +207,23 @@ fn parse_input(inp: &str, num_letters: usize) -> Result<Vec<Info>, String> {
         if c.is_whitespace() {
             continue;
         }
-        if flag == '\0' {
-            flag = c;
+        if flag.is_none() {
+            flag = Some(c);
             continue;
         }
-        let info = match flag {
+        let info = match flag.unwrap() {
             '*' => Info::Exact(c),
             '?' => Info::Somewhere(c),
             '!' => Info::No(c),
-            _ => {
-                return Err(format!("unknown annotation {:?}", flag));
+            other => {
+                return Err(format!("unknown annotation {:?}", other));
             }
         };
         infos.push(info);
-        flag = '\0';
+        flag = None;
     }
-    if flag != '\0' {
-        return Err(format!("unprocessed input {:?}", flag));
+    if let Some(extra) = flag {
+        return Err(format!("unprocessed input {:?}", extra));
     }
     Ok(infos)
 }
