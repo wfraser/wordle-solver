@@ -27,6 +27,7 @@ struct Args {
     word: Option<String>,
 }
 
+/// Represents one letter tile.
 #[derive(Debug, Clone, PartialEq)]
 enum Info {
     /// Green letters
@@ -39,15 +40,23 @@ enum Info {
     No(char),
 }
 
+/// Represents everything known about the game state.
 #[derive(Debug, Clone)]
 struct Knowledge {
+    /// Restrictions on which letters can go in which spaces.
     restrictions: Vec<Restriction>,
+
+    /// Letters that must appear *somewhere* in the word (and how many times).
     must_have: HashMap<char, usize>,
 }
 
+/// A restriction on a letter at a particular position.
 #[derive(Debug, Clone)]
 enum Restriction {
+    /// Letter must be exactly the given letter.
     Exact(char),
+
+    /// Letter must not be any of the given letters.
     Not(Vec<char>),
 }
 
