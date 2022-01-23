@@ -107,7 +107,11 @@ fn main() -> io::Result<()> {
     }
 
     if !args.word.is_empty() {
-        let all_candidates = BufReader::new(words_file)
+        if args.word.len() != args.num_letters {
+            println!("wrong number of letters in \"{}\"", args.word);
+            std::process::exit(1);
+        }
+        let dictionary = BufReader::new(words_file)
             .lines()
             .filter_map(|res| {
                 match res {
@@ -122,8 +126,9 @@ fn main() -> io::Result<()> {
                 }
             })
             .collect::<io::Result<Vec<_>>>()?;
-        let n = guess_word(&args.word, &all_candidates, &letter_freq);
-        println!("{} tries required", n);
+        println!("{} words in dictionary", dictionary.len());
+        let n = guess_word(&args.word, dictionary, &letter_freq);
+        println!("{} guesses required", n);
         return Ok(());
     }
 
@@ -191,7 +196,7 @@ fn most_difficult_word(mut dict_file: File, num_letters: usize, letter_freq: &Ha
 
     let mut worst = (vec![String::new()], 0);
     for word in &all_candidates {
-        let guess_num = guess_word(word, &all_candidates, letter_freq);
+        let guess_num = guess_word(word, &all_candidates[..], letter_freq);
         match guess_num.cmp(&worst.1) {
             Ordering::Equal => {
                 println!("tie for worst: {} in {} guesses", word, guess_num);
@@ -208,13 +213,18 @@ fn most_difficult_word(mut dict_file: File, num_letters: usize, letter_freq: &Ha
     Ok(worst)
 }
 
-fn guess_word(word: &str, words: &[String], letter_freq: &HashMap<char, f64>) -> u64 {
+fn guess_word(word: &str, words: impl Into<Vec<String>>, letter_freq: &HashMap<char, f64>) -> u64 {
     println!("checking {}", word);
-    let mut candidates = words.to_vec();
+    let mut candidates = words.into();
     let mut knowledge = Knowledge::new(word.len());
 
     for guess_num in 1 .. {
         let best_guesses = best_candidates(candidates.iter(), &knowledge, letter_freq);
+        if best_guesses.is_empty() {
+            println!("dunno lol");
+            println!("is the word in the dictionary?");
+            return guess_num - 1;
+        }
         let guess = best_guesses[0];
         println!("  guessing {}", guess);
         if guess == word {
@@ -293,6 +303,9 @@ fn best_candidates<I, W>(
     // continue ranking and adding words with fewer unique letters.
     let mut by_letters_ref = &mut by_letters[..];
     while results.len() < 10 {
+        if by_letters_ref.is_empty() {
+            break; // shouldn't happen unless the word is not in the dictionary somehow
+        }
         let most_letters_count = by_letters_ref[0].1;
         let len = {
             // Only look at the words with the most unique letters.
