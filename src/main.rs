@@ -24,7 +24,7 @@ struct Args {
 
     /// Try to guess a specific word.
     #[structopt(long)]
-    word: String,
+    word: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -106,9 +106,9 @@ fn main() -> io::Result<()> {
         return Ok(());
     }
 
-    if !args.word.is_empty() {
-        if args.word.len() != args.num_letters {
-            println!("wrong number of letters in \"{}\"", args.word);
+    if let Some(word) = args.word {
+        if word.len() != args.num_letters {
+            println!("wrong number of letters in \"{}\"", word);
             std::process::exit(1);
         }
         let dictionary = BufReader::new(words_file)
@@ -127,7 +127,7 @@ fn main() -> io::Result<()> {
             })
             .collect::<io::Result<Vec<_>>>()?;
         println!("{} words in dictionary", dictionary.len());
-        let n = guess_word(&args.word, dictionary, &letter_freq);
+        let n = guess_word(&word, dictionary, &letter_freq);
         println!("{} guesses required", n);
         return Ok(());
     }
