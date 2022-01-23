@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::hash_map::*;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Seek, Write};
@@ -20,6 +21,10 @@ struct Args {
     /// Search for the words which require the most guesses.
     #[structopt(long)]
     most_difficult: bool,
+
+    /// Try to guess a specific word.
+    #[structopt(long)]
+    word: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -101,6 +106,27 @@ fn main() -> io::Result<()> {
         return Ok(());
     }
 
+    if !args.word.is_empty() {
+        let all_candidates = BufReader::new(words_file)
+            .lines()
+            .filter_map(|res| {
+                match res {
+                    Ok(word) => {
+                        if knowledge.check_word(&word, false) {
+                            Some(Ok(word))
+                        } else {
+                            None
+                        }
+                    }
+                    Err(e) => Some(Err(e)),
+                }
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        let n = guess_word(&args.word, &all_candidates, &letter_freq);
+        println!("{} tries required", n);
+        return Ok(());
+    }
+
     loop {
         let mut candidates = vec![];
         for res in BufReader::new(&mut words_file).lines() {
@@ -165,73 +191,82 @@ fn most_difficult_word(mut dict_file: File, num_letters: usize, letter_freq: &Ha
 
     let mut worst = (vec![String::new()], 0);
     for word in &all_candidates {
-        println!("checking {}", word);
-        let mut knowledge = Knowledge::new(num_letters);
-        let mut candidates = all_candidates.clone();
-
-        for guess_num in 1 .. {
-            let best_guesses = best_candidates(candidates.iter(), &knowledge, letter_freq);
-            let guess = best_guesses[0];
-            println!("  guessing {}", guess);
-            if guess == word {
-                if guess_num == worst.1 {
-                    println!("tie for worst: {} in {} guesses", word, guess_num);
-                    worst.0.push(word.to_owned());
-                } else if guess_num > worst.1 {
-                    println!("new worst: {} in {} guesses", word, guess_num);
-                    worst = (vec![word.to_owned()], guess_num);
-                }
-                break;
+        let guess_num = guess_word(word, &all_candidates, letter_freq);
+        match guess_num.cmp(&worst.1) {
+            Ordering::Equal => {
+                println!("tie for worst: {} in {} guesses", word, guess_num);
+                worst.0.push(word.to_owned());
             }
-
-            let mut infos = vec![];
-            for (gc, wc) in guess.chars().zip(word.chars()) {
-                let info = if wc == gc {
-                    Info::Exact(gc)
-                } else if word.contains(gc) {
-                    // How many are in the actual word?
-                    let count = word.chars()
-                        .filter(|&c| c == gc)
-                        .count();
-                    // How many match our guess? These get green tiles first.
-                    let matched = word.chars()
-                        .zip(guess.chars())
-                        .filter(|(w, g)| w == g && *w == gc)
-                        .count();
-                    // How many yellow tiles have we assigned elsewhere?
-                    let elsewhere = infos.iter()
-                        .filter(|i| matches!(i, Info::Somewhere(c) if *c == gc))
-                        .count();
-                    if count > matched + elsewhere {
-                        // There's more to be found, give a yellow tile.
-                        Info::Somewhere(gc)
-                    } else {
-                        // Enough non-gray tiles have been assigned already.
-                        Info::No(gc)
-                    }
-                } else {
-                    Info::No(gc)
-                };
-                infos.push(info);
+            Ordering::Greater => {
+                println!("new worst: {} in {} guesses", word, guess_num);
+                worst = (vec![word.to_owned()], guess_num);
             }
-
-            if let Err(e) = knowledge.add_infos(infos, false) {
-                eprintln!("ERROR on {}: {}", word, e);
-                break;
-            }
-
-            let mut new_candidates = vec![];
-            for cword in candidates.into_iter() {
-                if knowledge.check_word(&cword, false) {
-                    new_candidates.push(cword);
-                }
-            }
-            candidates = new_candidates;
-            println!("  {} new candidates", candidates.len());
+            _ => ()
         }
     }
 
     Ok(worst)
+}
+
+fn guess_word(word: &str, words: &[String], letter_freq: &HashMap<char, f64>) -> u64 {
+    println!("checking {}", word);
+    let mut candidates = words.to_vec();
+    let mut knowledge = Knowledge::new(word.len());
+
+    for guess_num in 1 .. {
+        let best_guesses = best_candidates(candidates.iter(), &knowledge, letter_freq);
+        let guess = best_guesses[0];
+        println!("  guessing {}", guess);
+        if guess == word {
+            return guess_num;
+        }
+
+        let mut infos = vec![];
+        for (gc, wc) in guess.chars().zip(word.chars()) {
+            let info = if wc == gc {
+                Info::Exact(gc)
+            } else if word.contains(gc) {
+                // How many are in the actual word?
+                let count = word.chars()
+                    .filter(|&c| c == gc)
+                    .count();
+                // How many match our guess? These get green tiles first.
+                let matched = word.chars()
+                    .zip(guess.chars())
+                    .filter(|(w, g)| w == g && *w == gc)
+                    .count();
+                // How many yellow tiles have we assigned elsewhere?
+                let elsewhere = infos.iter()
+                    .filter(|i| matches!(i, Info::Somewhere(c) if *c == gc))
+                    .count();
+                if count > matched + elsewhere {
+                    // There's more to be found, give a yellow tile.
+                    Info::Somewhere(gc)
+                } else {
+                    // Enough non-gray tiles have been assigned already.
+                    Info::No(gc)
+                }
+            } else {
+                Info::No(gc)
+            };
+            infos.push(info);
+        }
+
+        if let Err(e) = knowledge.add_infos(infos, false) {
+            eprintln!("ERROR on {}: {}", word, e);
+            break;
+        }
+
+        let mut new_candidates = vec![];
+        for cword in candidates.into_iter() {
+            if knowledge.check_word(&cword, false) {
+                new_candidates.push(cword);
+            }
+        }
+        candidates = new_candidates;
+        println!("  {} new candidates", candidates.len());
+    }
+    unreachable!()
 }
 
 fn best_candidates<I, W>(
@@ -495,7 +530,7 @@ impl TryFrom<f64> for NonNan {
 
 #[allow(clippy::derive_ord_xor_partial_ord)] // Ord just calls PartialOrd
 impl std::cmp::Ord for NonNan {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> Ordering {
         self.partial_cmp(other).unwrap()
     }
 }
