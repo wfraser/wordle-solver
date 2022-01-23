@@ -226,7 +226,7 @@ fn guess_word(word: &str, words: impl Into<Vec<String>>, letter_freq: &HashMap<c
             return guess_num - 1;
         }
         let guess = best_guesses[0];
-        println!("  guessing {}", guess);
+        println!("  {}: guessing {}", guess_num, guess);
         if guess == word {
             return guess_num;
         }
@@ -274,7 +274,7 @@ fn guess_word(word: &str, words: impl Into<Vec<String>>, letter_freq: &HashMap<c
             }
         }
         candidates = new_candidates;
-        println!("  {} new candidates", candidates.len());
+        println!("    {} candidates left", candidates.len());
     }
     unreachable!()
 }
