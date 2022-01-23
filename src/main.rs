@@ -5,14 +5,21 @@ use structopt::StructOpt;
 
 #[derive(Debug, StructOpt)]
 struct Args {
+    /// How many letters in the word?
     #[structopt(default_value = "5")]
     num_letters: usize,
 
+    /// Path to a dictionary file, with one word per line.
     #[structopt(default_value = "/usr/share/dict/words")]
     dictionary_path: String,
 
+    /// Enable debug output?
     #[structopt(short = "v", long)]
     verbose: bool,
+
+    /// Search for the words which require the most guesses.
+    #[structopt(long)]
+    most_difficult: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -84,6 +91,16 @@ fn main() -> io::Result<()> {
         }
     }
 
+    if args.most_difficult {
+        let (words, guesses) = most_difficult_word(words_file, args.num_letters, &letter_freq)?;
+        println!("worst word(s):");
+        for word in &words {
+            println!("\t{}", word);
+        }
+        println!("in {} guesses", guesses);
+        return Ok(());
+    }
+
     loop {
         let mut candidates = vec![];
         for res in BufReader::new(&mut words_file).lines() {
@@ -133,6 +150,88 @@ fn main() -> io::Result<()> {
 
         words_file.rewind()?;
     }
+}
+
+fn most_difficult_word(mut dict_file: File, num_letters: usize, letter_freq: &HashMap<char, f64>) -> io::Result<(Vec<String>, u64)> {
+    let mut all_candidates = vec![];
+    let empty_knowledge = Knowledge::new(num_letters);
+    for res in BufReader::new(&mut dict_file).lines() {
+        let word = res?;
+        if empty_knowledge.check_word(&word, false) {
+            all_candidates.push(word);
+        }
+    }
+    dict_file.rewind()?;
+
+    let mut worst = (vec![String::new()], 0);
+    for word in &all_candidates {
+        println!("checking {}", word);
+        let mut knowledge = Knowledge::new(num_letters);
+        let mut candidates = all_candidates.clone();
+
+        for guess_num in 1 .. {
+            let best_guesses = best_candidates(candidates.iter(), &knowledge, letter_freq);
+            let guess = best_guesses[0];
+            println!("  guessing {}", guess);
+            if guess == word {
+                if guess_num == worst.1 {
+                    println!("tie for worst: {} in {} guesses", word, guess_num);
+                    worst.0.push(word.to_owned());
+                } else if guess_num > worst.1 {
+                    println!("new worst: {} in {} guesses", word, guess_num);
+                    worst = (vec![word.to_owned()], guess_num);
+                }
+                break;
+            }
+
+            let mut infos = vec![];
+            for (gc, wc) in guess.chars().zip(word.chars()) {
+                let info = if wc == gc {
+                    Info::Exact(gc)
+                } else if word.contains(gc) {
+                    // How many are in the actual word?
+                    let count = word.chars()
+                        .filter(|&c| c == gc)
+                        .count();
+                    // How many match our guess? These get green tiles first.
+                    let matched = word.chars()
+                        .zip(guess.chars())
+                        .filter(|(w, g)| w == g && *w == gc)
+                        .count();
+                    // How many yellow tiles have we assigned elsewhere?
+                    let elsewhere = infos.iter()
+                        .filter(|i| matches!(i, Info::Somewhere(c) if *c == gc))
+                        .count();
+                    if count > matched + elsewhere {
+                        // There's more to be found, give a yellow tile.
+                        Info::Somewhere(gc)
+                    } else {
+                        // Enough non-gray tiles have been assigned already.
+                        Info::No(gc)
+                    }
+                } else {
+                    Info::No(gc)
+                };
+                infos.push(info);
+            }
+
+            if let Err(e) = knowledge.add_infos(infos, false) {
+                eprintln!("ERROR on {}: {}", word, e);
+                break;
+            }
+
+            let mut new_candidates = vec![];
+            for cword in candidates.into_iter() {
+                if knowledge.check_word(&cword, false) {
+                    new_candidates.push(cword);
+                }
+            }
+            candidates = new_candidates;
+            println!("  {} new candidates", candidates.len());
+        }
+    }
+
+    Ok(worst)
 }
 
 fn best_candidates<I, W>(
