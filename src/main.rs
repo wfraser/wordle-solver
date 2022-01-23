@@ -102,52 +102,10 @@ fn main() -> io::Result<()> {
             return Ok(());
         }
 
-        print_words("candidates", candidates.iter());
-
-        let mut by_letters = candidates
-            .iter()
-            .map(|word| {
-                let mut letters = word.chars().collect::<Vec<_>>();
-                letters.sort_unstable();
-                letters.dedup();
-                (word.clone(), letters.len())
-            })
-            .collect::<Vec<_>>();
-        by_letters.sort_unstable_by(|(_word1, count1), (_word2, count2)| count2.cmp(count1));
-
-        let most_unique_letters = by_letters.split(|(_word, count)| *count < by_letters[0].1).next().unwrap();
-
-        if most_unique_letters.len() > 1 {
-            let mut by_freq = most_unique_letters
-                .iter()
-                .map(|(word, _count)| {
-                    let score = word.chars()
-                        .map(|c| {
-                            // Letters we already have knowledge about count for zero.
-                            if knowledge.must_have.iter().any(|(&x, _)| x == c)
-                                || knowledge.restrictions.iter().any(|r| {
-                                    match r {
-                                        Restriction::Not(v) => v.iter().any(|&x| x == c),
-                                        Restriction::Exact(x) => *x == c,
-                                    }
-                                })
-                            {
-                                0.
-                            } else {
-                                // Otherwise add up the English letter frequency
-                                letter_freq[&c]
-                            }
-                        })
-                        .sum::<f64>();
-                    (word, score)
-                })
-                .collect::<Vec<_>>();
-            by_freq.sort_unstable_by(|(_, f1), (_, f2)| f2.partial_cmp(f1).unwrap());
-            print_words("most unique letters, sorted by letter frequency",
-                by_freq.iter().map(|(word, score)| format!("\n\t({}, {})", word, score)));
-        } else {
-            println!("most unique letters: {}", most_unique_letters[0].0);
-        }
+        println!("{} candidates.", candidates.len());
+        let best = best_candidates(candidates.iter(), &knowledge, &letter_freq);
+        print_words("By most unique letters and letter frequency",
+            best.iter().map(|w| format!("\n\t{}", w)));
 
         loop {
             print!("Type the guess you made. Prefix each letter with: green=*, yellow=?, gray=!: ");
@@ -175,6 +133,78 @@ fn main() -> io::Result<()> {
 
         words_file.rewind()?;
     }
+}
+
+fn best_candidates<I, W>(
+    candidates: I,
+    knowledge: &Knowledge,
+    letter_freq: &HashMap<char, f64>,
+) -> Vec<<W as ToOwned>::Owned>
+    where I: Iterator<Item=W>,
+          W: AsRef<str> + ToOwned,
+{
+    let mut by_letters = candidates
+        .map(|word| {
+            let mut letters = word.as_ref().chars().collect::<Vec<_>>();
+            letters.sort_unstable();
+            letters.dedup();
+            (word, letters.len())
+        })
+        .collect::<Vec<_>>();
+    by_letters.sort_unstable_by(|(_, c1), (_, c2)| c2.cmp(c1));
+
+    let mut results = vec![];
+
+    // Start with the words with the most unique letters. If that gives less than 10 results, then
+    // continue ranking and adding words with fewer unique letters.
+    let mut by_letters_ref = &mut by_letters[..];
+    while results.len() < 10 {
+        let most_letters_count = by_letters_ref[0].1;
+        let len = {
+            // Only look at the words with the most unique letters.
+            let most_unique_letters = by_letters_ref.split_mut(|(_, count)| *count < most_letters_count).next().unwrap();
+            if most_unique_letters.len() != 1 {
+                // Sort the words score, according to letter frequency.
+                most_unique_letters.sort_by_cached_key::<NonNan, _>(|(word, _)| {
+                    word.as_ref().chars()
+                        .map(|c| {
+                            // Letters we already have knowledge about count for zero.
+                            if knowledge.must_have.iter().any(|(&x, _)| x == c)
+                                || knowledge.restrictions.iter().any(|r| {
+                                    match r {
+                                        Restriction::Not(v) => v.iter().any(|&x| x == c),
+                                        Restriction::Exact(x) => *x == c,
+                                    }
+                                })
+                            {
+                                0.
+                            } else {
+                                // Otherwise, add up the frequency of letters in the dictionary.
+                                // Negative, so they are sorted with highest score first.
+                                -letter_freq[&c]
+                            }
+                        })
+                        .sum::<f64>()
+                        .try_into() // into NonNan
+                        .unwrap()
+                });
+            }
+            results.extend(
+                most_unique_letters
+                    .iter()
+                    .map(|(word, _)| word.to_owned())
+            );
+            most_unique_letters.len()
+        };
+
+        // Subsequent loop iterations will skip over these words and begin considering words with
+        // fewer unique letters.
+        by_letters_ref = &mut by_letters_ref[len .. ];
+        if by_letters_ref.is_empty() {
+            break;
+        }
+    }
+    results
 }
 
 fn print_words<T: AsRef<str>>(msg: &str, words: impl Iterator<Item=T>) {
@@ -349,6 +379,29 @@ impl Knowledge {
         true
     }
 }
+
+#[derive(PartialEq, PartialOrd)]
+struct NonNan(f64);
+
+impl TryFrom<f64> for NonNan {
+    type Error = f64;
+    fn try_from(f: f64) -> Result<Self, f64> {
+        if f.is_nan() {
+            Err(f)
+        } else {
+            Ok(Self(f))
+        }
+    }
+}
+
+#[allow(clippy::derive_ord_xor_partial_ord)] // Ord just calls PartialOrd
+impl std::cmp::Ord for NonNan {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.partial_cmp(other).unwrap()
+    }
+}
+
+impl std::cmp::Eq for NonNan {}
 
 #[cfg(test)]
 mod test {
