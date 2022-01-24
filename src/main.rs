@@ -1,7 +1,8 @@
 use std::cmp::Ordering;
 use std::collections::hash_map::*;
+use std::collections::BTreeSet;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Seek, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use structopt::StructOpt;
 
 #[derive(Debug, StructOpt)]
@@ -65,7 +66,7 @@ fn main() -> io::Result<()> {
 
     let mut knowledge = Knowledge::new(args.num_letters);
 
-    let mut words_file = match File::open(&args.dictionary_path) {
+    let words_file = match File::open(&args.dictionary_path) {
         Ok(f) => f,
         Err(e) => {
             println!("dictionary file {:?} could not be opened: {}", args.dictionary_path, e);
@@ -76,19 +77,27 @@ fn main() -> io::Result<()> {
         }
     };
 
+    // Build a list of all words of the correct length. Use a BTreeSet because we want the words to
+    // be in order (makes it easier to debug things when order is deterministic).
+    let mut dictionary = BTreeSet::<String>::new();
+    for res in BufReader::new(words_file).lines() {
+        let word = res?;
+        if knowledge.check_word(&word, args.verbose) {
+            dictionary.insert(word);
+        }
+    }
+
     // Build a map of letters to how often they occur in N-letter words.
     let mut letter_freq = HashMap::<char, f64>::new();
-    for res in BufReader::new(&mut words_file).lines() {
-        let word = res?;
+    for word in dictionary.iter() {
         // Knowledge is empty, so this just checks word length and letters against the alphabet.
-        if !knowledge.check_word(&word, args.verbose) {
+        if !knowledge.check_word(word, args.verbose) {
             continue;
         }
         for c in word.chars() {
             *letter_freq.entry(c).or_insert(0.) += 1.;
         }
     }
-    words_file.rewind()?;
 
     // Normalize by total number of letters.
     let total_letters = letter_freq.iter().map(|(_c, count)| count).sum::<f64>();
@@ -106,7 +115,7 @@ fn main() -> io::Result<()> {
     }
 
     if args.most_difficult {
-        let (words, guesses) = most_difficult_word(words_file, args.num_letters, &letter_freq)?;
+        let (words, guesses) = most_difficult_word(dictionary, &letter_freq)?;
         println!("worst word(s):");
         for word in &words {
             println!("\t{}", word);
@@ -120,21 +129,6 @@ fn main() -> io::Result<()> {
             println!("wrong number of letters in \"{}\"", word);
             std::process::exit(1);
         }
-        let dictionary = BufReader::new(words_file)
-            .lines()
-            .filter_map(|res| {
-                match res {
-                    Ok(word) => {
-                        if knowledge.check_word(&word, false) {
-                            Some(Ok(word))
-                        } else {
-                            None
-                        }
-                    }
-                    Err(e) => Some(Err(e)),
-                }
-            })
-            .collect::<io::Result<Vec<_>>>()?;
         println!("{} words in dictionary", dictionary.len());
         let n = guess_word(&word, dictionary, &letter_freq);
         println!("{} guesses required", n);
@@ -142,25 +136,13 @@ fn main() -> io::Result<()> {
     }
 
     loop {
-        let mut candidates = vec![];
-        for res in BufReader::new(&mut words_file).lines() {
-            let word = res?;
-
-            if knowledge.check_word(&word, args.verbose) {
-                if args.verbose {
-                    eprintln!("adding {}", word);
-                }
-                candidates.push(word);
-            }
-        }
-
-        if candidates.is_empty() {
+        if dictionary.is_empty() {
             println!("no candidates left!");
             return Ok(());
         }
 
-        println!("{} candidates.", candidates.len());
-        let best = best_candidates(candidates.iter(), &knowledge, &letter_freq);
+        println!("{} candidates.", dictionary.len());
+        let best = best_candidates(dictionary.iter(), &knowledge, &letter_freq);
         print_words("By most unique letters and letter frequency",
             best.iter().map(|w| format!("\n\t{}", w)));
 
@@ -188,24 +170,17 @@ fn main() -> io::Result<()> {
             break;
         }
 
-        words_file.rewind()?;
+        dictionary.retain(|word| knowledge.check_word(word, args.verbose));
     }
 }
 
-fn most_difficult_word(mut dict_file: File, num_letters: usize, letter_freq: &HashMap<char, f64>) -> io::Result<(Vec<String>, u64)> {
-    let mut all_candidates = vec![];
-    let empty_knowledge = Knowledge::new(num_letters);
-    for res in BufReader::new(&mut dict_file).lines() {
-        let word = res?;
-        if empty_knowledge.check_word(&word, false) {
-            all_candidates.push(word);
-        }
-    }
-    dict_file.rewind()?;
-
+fn most_difficult_word(
+    dictionary: BTreeSet<String>,
+    letter_freq: &HashMap<char, f64>,
+) -> io::Result<(Vec<String>, u64)> {
     let mut worst = (vec![String::new()], 0);
-    for word in &all_candidates {
-        let guess_num = guess_word(word, &all_candidates[..], letter_freq);
+    for word in &dictionary {
+        let guess_num = guess_word(word, dictionary.clone(), letter_freq);
         match guess_num.cmp(&worst.1) {
             Ordering::Equal => {
                 println!("tie for worst: {} in {} guesses", word, guess_num);
@@ -222,9 +197,8 @@ fn most_difficult_word(mut dict_file: File, num_letters: usize, letter_freq: &Ha
     Ok(worst)
 }
 
-fn guess_word(word: &str, words: impl Into<Vec<String>>, letter_freq: &HashMap<char, f64>) -> u64 {
+fn guess_word(word: &str, mut candidates: BTreeSet<String>, letter_freq: &HashMap<char, f64>) -> u64 {
     println!("checking {}", word);
-    let mut candidates = words.into();
     let mut knowledge = Knowledge::new(word.len());
 
     for guess_num in 1 .. {
@@ -276,13 +250,7 @@ fn guess_word(word: &str, words: impl Into<Vec<String>>, letter_freq: &HashMap<c
             break;
         }
 
-        let mut new_candidates = vec![];
-        for cword in candidates.into_iter() {
-            if knowledge.check_word(&cword, false) {
-                new_candidates.push(cword);
-            }
-        }
-        candidates = new_candidates;
+        candidates.retain(|word| knowledge.check_word(word, false));
         println!("    {} candidates left", candidates.len());
     }
     unreachable!()
