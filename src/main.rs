@@ -19,13 +19,17 @@ struct Args {
     #[structopt(short = "v", long)]
     verbose: bool,
 
-    /// Search for the words which require the most guesses.
-    #[structopt(long)]
-    most_difficult: bool,
-
     /// Try to guess a specific word.
     #[structopt(long)]
     word: Option<String>,
+
+    /// Try to guess every word in the dictionary.
+    ///
+    /// For each word prints one line of the following format:
+    ///
+    /// <guesses required> <the word> (<size of dictionary>) [<guessed word> (<words remaining>)]...
+    #[structopt(long)]
+    check_all_words: bool,
 }
 
 /// Represents one letter tile.
@@ -114,25 +118,29 @@ fn main() -> io::Result<()> {
         }
     }
 
-    if args.most_difficult {
-        let (words, guesses) = most_difficult_word(dictionary, &letter_freq)?;
-        println!("worst word(s):");
-        for word in &words {
-            println!("\t{}", word);
-        }
-        println!("in {} guesses", guesses);
-        return Ok(());
-    }
-
     if let Some(word) = args.word {
         if word.len() != args.num_letters {
             println!("wrong number of letters in \"{}\"", word);
             std::process::exit(1);
         }
         println!("{} words in dictionary", dictionary.len());
-        let n = guess_word(&word, dictionary, &letter_freq);
-        println!("{} guesses required", n);
+        println!("checking: {}", word);
+        let guesses = guess_word(&word, dictionary, &letter_freq);
+        for (guess_num, (guess, remaining)) in guesses.iter().enumerate() {
+            if guess.is_empty() {
+                println!("dunno lol");
+                println!("is the word in the dictionary?");
+                break;
+            }
+            println!("  {}: guessing {}", guess_num, guess);
+            println!("    {} candidates left", remaining);
+        }
+        println!("{} guesses required", guesses.len());
         return Ok(());
+    }
+
+    if args.check_all_words {
+        return check_all_words(dictionary, &letter_freq);
     }
 
     loop {
@@ -174,44 +182,39 @@ fn main() -> io::Result<()> {
     }
 }
 
-fn most_difficult_word(
+fn check_all_words(
     dictionary: BTreeSet<String>,
     letter_freq: &HashMap<char, f64>,
-) -> io::Result<(Vec<String>, u64)> {
-    let mut worst = (vec![String::new()], 0);
+) -> io::Result<()> {
     for word in &dictionary {
-        let guess_num = guess_word(word, dictionary.clone(), letter_freq);
-        match guess_num.cmp(&worst.1) {
-            Ordering::Equal => {
-                println!("tie for worst: {} in {} guesses", word, guess_num);
-                worst.0.push(word.to_owned());
-            }
-            Ordering::Greater => {
-                println!("new worst: {} in {} guesses", word, guess_num);
-                worst = (vec![word.to_owned()], guess_num);
-            }
-            _ => ()
+        let guesses = guess_word(word, dictionary.clone(), letter_freq);
+        print!("{} {} ({})", guesses.len(), word, dictionary.len());
+        for (guess, remaining) in guesses {
+            print!(" {} ({})", guess, remaining);
         }
+        println!();
     }
-
-    Ok(worst)
+    Ok(())
 }
 
-fn guess_word(word: &str, mut candidates: BTreeSet<String>, letter_freq: &HashMap<char, f64>) -> u64 {
-    println!("checking {}", word);
+fn guess_word(
+    word: &str,
+    mut candidates: BTreeSet<String>,
+    letter_freq: &HashMap<char, f64>,
+) -> Vec<(String, usize)> {
+    let mut guesses = vec![];
     let mut knowledge = Knowledge::new(word.len());
 
-    for guess_num in 1 .. {
+    loop {
         let best_guesses = best_candidates(candidates.iter(), &knowledge, letter_freq);
         if best_guesses.is_empty() {
-            println!("dunno lol");
-            println!("is the word in the dictionary?");
-            return guess_num - 1;
+            guesses.push((String::new(), 0));
+            return guesses;
         }
-        let guess = best_guesses[0];
-        println!("  {}: guessing {}", guess_num, guess);
+        let guess = best_guesses[0].to_owned();
         if guess == word {
-            return guess_num;
+            guesses.push((guess, 1));
+            return guesses;
         }
 
         let mut infos = vec![];
@@ -246,14 +249,12 @@ fn guess_word(word: &str, mut candidates: BTreeSet<String>, letter_freq: &HashMa
         }
 
         if let Err(e) = knowledge.add_infos(infos, false) {
-            eprintln!("ERROR on {}: {}", word, e);
-            break;
+            panic!("ERROR on {} (guessing {}): {}", word, guess, e);
         }
 
         candidates.retain(|word| knowledge.check_word(word, false));
-        println!("    {} candidates left", candidates.len());
+        guesses.push((guess, candidates.len()));
     }
-    unreachable!()
 }
 
 fn best_candidates<I, W>(
