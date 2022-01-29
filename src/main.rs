@@ -86,18 +86,14 @@ fn main() -> io::Result<()> {
     let mut dictionary = BTreeSet::<String>::new();
     for res in BufReader::new(words_file).lines() {
         let word = res?;
-        if knowledge.check_word(&word, args.verbose) {
+        if knowledge.check_word(&word, false) {
             dictionary.insert(word);
         }
     }
 
     // Build a map of letters to how often they occur in N-letter words.
     let mut letter_freq = HashMap::<char, f64>::new();
-    for word in dictionary.iter() {
-        // Knowledge is empty, so this just checks word length and letters against the alphabet.
-        if !knowledge.check_word(word, args.verbose) {
-            continue;
-        }
+    for word in &dictionary {
         for c in word.chars() {
             *letter_freq.entry(c).or_insert(0.) += 1.;
         }
@@ -140,7 +136,8 @@ fn main() -> io::Result<()> {
     }
 
     if args.check_all_words {
-        return check_all_words(dictionary, &letter_freq);
+        check_all_words(&dictionary, &letter_freq);
+        return Ok(());
     }
 
     loop {
@@ -169,7 +166,7 @@ fn main() -> io::Result<()> {
                     continue;
                 }
                 Ok(infos) => {
-                    if let Err(e) = knowledge.add_infos(infos, args.verbose) {
+                    if let Err(e) = knowledge.add_infos(&infos, args.verbose) {
                         println!("Bad input: {}", e);
                         continue;
                     }
@@ -182,11 +179,8 @@ fn main() -> io::Result<()> {
     }
 }
 
-fn check_all_words(
-    dictionary: BTreeSet<String>,
-    letter_freq: &HashMap<char, f64>,
-) -> io::Result<()> {
-    for word in &dictionary {
+fn check_all_words(dictionary: &BTreeSet<String>, letter_freq: &HashMap<char, f64>) {
+    for word in dictionary {
         let guesses = guess_word(word, dictionary.clone(), letter_freq);
         print!("{} {} ({})", guesses.len(), word, dictionary.len());
         for (guess, remaining) in guesses {
@@ -194,7 +188,6 @@ fn check_all_words(
         }
         println!();
     }
-    Ok(())
 }
 
 fn guess_word(
@@ -211,7 +204,7 @@ fn guess_word(
             guesses.push((String::new(), 0));
             return guesses;
         }
-        let guess = best_guesses[0].to_owned();
+        let guess = best_guesses[0].clone();
         if guess == word {
             guesses.push((guess, 1));
             return guesses;
@@ -248,7 +241,7 @@ fn guess_word(
             infos.push(info);
         }
 
-        if let Err(e) = knowledge.add_infos(infos, false) {
+        if let Err(e) = knowledge.add_infos(&infos, false) {
             panic!("ERROR on {} (guessing {}): {}", word, guess, e);
         }
 
@@ -414,7 +407,7 @@ impl Knowledge {
             }
             Info::No(c) => {
                 let mut add = true;
-                for r in self.restrictions.iter_mut() {
+                for r in &mut self.restrictions {
                     if let Restriction::Not(list) = r {
                         if list.iter().any(|x| x == c) {
                             if verbose {
@@ -429,7 +422,7 @@ impl Knowledge {
                     if verbose {
                         eprintln!("adding restriction against {}", c);
                     }
-                    for r in self.restrictions.iter_mut() {
+                    for r in &mut self.restrictions {
                         if let Restriction::Not(list) = r {
                             if !list.iter().any(|x| x == c) {
                                 list.push(*c);
@@ -442,7 +435,7 @@ impl Knowledge {
         Ok(())
     }
 
-    pub fn add_infos(&mut self, infos: Vec<Info>, verbose: bool) -> Result<(), String> {
+    pub fn add_infos(&mut self, infos: &[Info], verbose: bool) -> Result<(), String> {
         let mut k2 = self.clone();
         let mut must = HashMap::new();
 
@@ -452,11 +445,11 @@ impl Knowledge {
                 Info::Somewhere(c) | Info::Exact(c) => {
                     *must.entry(c).or_insert(0) += 1;
                 }
-                _ => (),
+                Info::No(_) => (),
             }
         }
 
-        for (c, num) in must.into_iter() {
+        for (c, num) in must {
             match k2.must_have.entry(*c) {
                 Entry::Occupied(mut entry) => {
                     entry.insert((*entry.get()).min(num));
@@ -501,6 +494,9 @@ impl Knowledge {
             }
         }
 
+        if verbose {
+            eprintln!("{}: matches", word);
+        }
         true
     }
 }
@@ -536,7 +532,7 @@ mod test {
     fn test_5() -> Result<(), String> {
         use Info::*;
         let mut k = Knowledge::new(5);
-        k.add_infos(vec![
+        k.add_infos(&[
             No('a'),
             No('d'),
             No('i'),
@@ -544,7 +540,7 @@ mod test {
             No('u'),
         ], true)?;
         assert!(k.check_word("thorn", true));
-        k.add_infos(vec![
+        k.add_infos(&[
             Somewhere('t'),
             No('h'),
             Somewhere('o'),
@@ -552,7 +548,7 @@ mod test {
             No('n'),
         ], true)?;
         assert!(k.check_word("sorts", true));
-        k.add_infos(vec![
+        k.add_infos(&[
             No('s'),
             Exact('o'),
             Somewhere('r'),
@@ -560,7 +556,7 @@ mod test {
             No('s'),
         ], true)?;
         assert!(!k.check_word("palmy", true));
-        k.add_infos(vec![
+        k.add_infos(&[
             No('p'),
             No('a'),
             No('l'),
@@ -578,7 +574,7 @@ mod test {
         use Info::*;
         let mut k = Knowledge::new(11);
         // !u?l*c?e?r?a!t!i*o!n!s
-        k.add_infos(vec![
+        k.add_infos(&[
             No('u'),
             Somewhere('l'),
             Exact('c'),
@@ -617,7 +613,7 @@ mod test {
     #[test]
     fn test_11_2() -> Result<(), String> {
         let mut k = Knowledge::new(11);
-        k.add_infos(parse_input("?u!l*c!e?r!a!t?i*o?n*s", 11)?, true)?;
+        k.add_infos(&parse_input("?u!l*c!e?r!a!t?i*o?n*s", 11)?, true)?;
         assert!(k.check_word("incongruous", true));
         Ok(())
     }
@@ -626,10 +622,10 @@ mod test {
     fn test_11_3() -> Result<(), String> {
         let mut k = Knowledge::new(11);
         // symptomatic / masochistic
-        k.add_infos(parse_input("!u!l?c!e!r?a?t?i?o!n?s", 11)?, true)?;
+        k.add_infos(&parse_input("!u!l?c!e!r?a?t?i?o!n?s", 11)?, true)?;
         assert!(k.check_word("symptomatic", true));
         assert!(k.check_word("masochistic", true));
-        k.add_infos(parse_input("?s!y?m!p!t?o!m?a*t*i*c", 11)?, true)?;
+        k.add_infos(&parse_input("?s!y?m!p!t?o!m?a*t*i*c", 11)?, true)?;
         assert!(!k.check_word("symptomatic", true));
         assert!(k.check_word("masochistic", true));
         Ok(())
@@ -639,11 +635,10 @@ mod test {
     fn test_11_4() -> Result<(), String> {
         let mut k = Knowledge::new(11);
         // symptomatic / masochistic
-        k.add_infos(parse_input("!u!l?c!e!r?a?t?i?o!n?s", 11)?, true)?;
+        k.add_infos(&parse_input("!u!l?c!e!r?a?t?i?o!n?s", 11)?, true)?;
         assert!(k.check_word("symptomatic", true));
         assert!(k.check_word("masochistic", true));
-        //k.add_infos(parse_input("?s!y?m!p!t?o!m?a*t*i*c", 11)?)?;
-        k.add_infos(parse_input("?m?a?s?o!c!h!i!s*t*i*c", 11)?, true)?;
+        k.add_infos(&parse_input("?m?a?s?o!c!h!i!s*t*i*c", 11)?, true)?;
         assert!(k.check_word("symptomatic", true));
         assert!(!k.check_word("masochistic", true));
         Ok(())
