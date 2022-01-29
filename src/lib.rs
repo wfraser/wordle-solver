@@ -109,6 +109,40 @@ pub fn best_candidates<I, W>(
     results
 }
 
+pub fn check_guess(word: &str, guess: &str) -> Vec<Info> {
+    let mut infos = vec![];
+    for (gc, wc) in guess.chars().zip(word.chars()) {
+        let info = if wc == gc {
+            Info::Exact(gc)
+        } else if word.contains(gc) {
+            // How many are in the actual word?
+            let count = word.chars()
+                .filter(|&c| c == gc)
+                .count();
+            // How many are in the right position? These get green tiles first.
+            let matched = word.chars()
+                .zip(guess.chars())
+                .filter(|(w, g)| w == g && *w == gc)
+                .count();
+            // How many yellow tiles have we assigned elsewhere?
+            let elsewhere = infos.iter()
+                .filter(|i| matches!(i, Info::Somewhere(c) if *c == gc))
+                .count();
+            if count > matched + elsewhere {
+                // There's more to be found; give a yellow tile.
+                Info::Somewhere(gc)
+            } else {
+                // Enough non-gray tiles have been assigned already.
+                Info::No(gc)
+            }
+        } else {
+            Info::No(gc)
+        };
+        infos.push(info);
+    }
+    infos
+}
+
 impl Knowledge {
     pub fn new(num_letters: usize) -> Self {
         Self {

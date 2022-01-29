@@ -177,37 +177,7 @@ fn guess_word(
             return guesses;
         }
 
-        let mut infos = vec![];
-        for (gc, wc) in guess.chars().zip(word.chars()) {
-            let info = if wc == gc {
-                Info::Exact(gc)
-            } else if word.contains(gc) {
-                // How many are in the actual word?
-                let count = word.chars()
-                    .filter(|&c| c == gc)
-                    .count();
-                // How many match our guess? These get green tiles first.
-                let matched = word.chars()
-                    .zip(guess.chars())
-                    .filter(|(w, g)| w == g && *w == gc)
-                    .count();
-                // How many yellow tiles have we assigned elsewhere?
-                let elsewhere = infos.iter()
-                    .filter(|i| matches!(i, Info::Somewhere(c) if *c == gc))
-                    .count();
-                if count > matched + elsewhere {
-                    // There's more to be found, give a yellow tile.
-                    Info::Somewhere(gc)
-                } else {
-                    // Enough non-gray tiles have been assigned already.
-                    Info::No(gc)
-                }
-            } else {
-                Info::No(gc)
-            };
-            infos.push(info);
-        }
-
+        let infos = check_guess(word, &guess);
         if let Err(e) = knowledge.add_infos(&infos, false) {
             panic!("ERROR on {} (guessing {}): {}", word, guess, e);
         }
