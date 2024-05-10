@@ -236,7 +236,7 @@ impl Knowledge {
         }
 
         for (i, (c, r)) in word.chars().zip(self.restrictions.iter()).enumerate() {
-            if !('a'..='z').contains(&c) {
+            if !c.is_ascii_lowercase() {
                 return false;
             }
 

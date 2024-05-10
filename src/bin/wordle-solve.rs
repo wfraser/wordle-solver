@@ -67,7 +67,7 @@ fn main() -> io::Result<()> {
     }
 
     // Normalize by total number of letters.
-    let total_letters = letter_freq.iter().map(|(_c, count)| count).sum::<f64>();
+    let total_letters = letter_freq.values().sum::<f64>();
     for v in letter_freq.values_mut() {
         *v /= total_letters;
     }
