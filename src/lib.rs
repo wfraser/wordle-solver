@@ -54,10 +54,9 @@ pub fn best_candidates<I, W>(
 
     let mut results = vec![];
 
-    // Start with the words with the most unique letters. If that gives less than 10 results, then
-    // continue ranking and adding words with fewer unique letters.
+    // Start with the words with the most unique letters.
     let mut by_letters_ref = &mut by_letters[..];
-    while results.len() < 10 {
+    loop {
         if by_letters_ref.is_empty() {
             break; // shouldn't happen unless the word is not in the dictionary somehow
         }
