@@ -92,14 +92,21 @@ fn main() -> io::Result<()> {
         println!("{} words in dictionary", dictionary.len());
         println!("checking: {}", word);
         let guesses = guess_word(&word, dictionary, &letter_freq);
-        for (guess_num, (guess, remaining)) in guesses.iter().enumerate() {
-            if guess.is_empty() {
+        for (guess_num, remaining) in guesses.iter().enumerate() {
+            if guess_num != 0 {
+                println!("    {} candidates left", remaining.len());
+                if args.verbose {
+                    for c in remaining {
+                        println!("      {c}");
+                    }
+                }
+            }
+            if remaining.is_empty() {
                 println!("dunno lol");
                 println!("is the word in the dictionary?");
                 break;
             }
-            println!("  {}: guessing {}", guess_num, guess);
-            println!("    {} candidates left", remaining);
+            println!("  {}: guessing {}", guess_num, remaining[0]);
         }
         println!("{} guesses required", guesses.len());
         return Ok(());
@@ -153,8 +160,8 @@ fn check_all_words(dictionary: &BTreeSet<String>, letter_freq: &HashMap<char, f6
     for word in dictionary {
         let guesses = guess_word(word, dictionary.clone(), letter_freq);
         print!("{} {} ({})", guesses.len(), word, dictionary.len());
-        for (guess, remaining) in guesses {
-            print!(" {} ({})", guess, remaining);
+        for remaining in guesses {
+            print!(" {} ({})", remaining[0], remaining.len());
         }
         println!();
     }
@@ -164,19 +171,18 @@ fn guess_word(
     word: &str,
     mut candidates: BTreeSet<String>,
     letter_freq: &HashMap<char, f64>,
-) -> Vec<(String, usize)> {
+) -> Vec<Vec<String>> {
     let mut guesses = vec![];
     let mut knowledge = Knowledge::new(word.len());
 
     loop {
         let best_guesses = best_candidates(candidates.iter(), &knowledge, letter_freq);
+        guesses.push(best_guesses.iter().cloned().cloned().collect());
         if best_guesses.is_empty() {
-            guesses.push((String::new(), 0));
             return guesses;
         }
         let guess = best_guesses[0].clone();
         if guess == word {
-            guesses.push((guess, 1));
             return guesses;
         }
 
@@ -186,7 +192,6 @@ fn guess_word(
         }
 
         candidates.retain(|word| knowledge.check_word(word, false));
-        guesses.push((guess, candidates.len()));
     }
 }
 
