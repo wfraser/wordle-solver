@@ -74,7 +74,7 @@ pub fn best_candidates<I, W>(
                             if knowledge.must_have.iter().any(|(&x, _)| x == c)
                                 || knowledge.restrictions.iter().any(|r| {
                                     match r {
-                                        Restriction::Not(v) => v.iter().any(|&x| x == c),
+                                        Restriction::Not(v) => v.contains(&c),
                                         Restriction::Exact(x) => *x == c,
                                     }
                                 })
