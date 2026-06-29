@@ -4,4 +4,4 @@ name = "wordle-solve"
 version = "0.1.0"
 
 [dependencies]
-structopt = "*"
+clap = { version = "4", features = ["derive"] }

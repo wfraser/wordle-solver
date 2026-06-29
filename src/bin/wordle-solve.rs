@@ -2,25 +2,25 @@ use std::collections::hash_map::*;
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
-use structopt::StructOpt;
+use clap::{CommandFactory, Parser};
 use wordle_solve::*;
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Parser)]
 struct Args {
     /// How many letters in the word?
-    #[structopt(default_value = "5")]
+    #[arg(long, short = 'n', default_value_t = 5)]
     num_letters: usize,
 
     /// Path to a dictionary file, with one word per line.
-    #[structopt(default_value = "/usr/share/dict/words")]
+    #[arg(default_value = "/usr/share/dict/words")]
     dictionary_path: String,
 
     /// Enable debug output?
-    #[structopt(short = "v", long)]
+    #[arg(short = 'v', long)]
     verbose: bool,
 
     /// Try to guess a specific word.
-    #[structopt(long)]
+    #[arg(long)]
     word: Option<String>,
 
     /// Try to guess every word in the dictionary.
@@ -28,12 +28,12 @@ struct Args {
     /// For each word prints one line of the following format:
     ///
     /// <guesses required> <the word> (<size of dictionary>) [<guessed word> (<words remaining>)]...
-    #[structopt(long)]
+    #[arg(long)]
     check_all_words: bool,
 }
 
 fn main() -> io::Result<()> {
-    let args = Args::from_args();
+    let args = Args::parse();
 
     let mut knowledge = Knowledge::new(args.num_letters);
 
@@ -42,7 +42,7 @@ fn main() -> io::Result<()> {
         Err(e) => {
             println!("dictionary file {:?} could not be opened: {}", args.dictionary_path, e);
             println!("to use a different file, specify it in command line arguments");
-            Args::clap().print_help().unwrap();
+            Args::command().print_help().unwrap();
             println!();
             std::process::exit(1);
         }
