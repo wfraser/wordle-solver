@@ -2,6 +2,7 @@ use std::collections::hash_map::*;
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
+use std::path::PathBuf;
 use clap::{CommandFactory, Parser};
 use wordle_solve::*;
 
@@ -12,8 +13,8 @@ struct Args {
     num_letters: usize,
 
     /// Path to a dictionary file, with one word per line.
-    #[arg(default_value = "/usr/share/dict/words")]
-    dictionary_path: String,
+    #[arg(default_value = "/usr/share/dict/words", value_name = "DICTIONARY")]
+    dictionary_paths: Vec<PathBuf>,
 
     /// Enable debug output?
     #[arg(short = 'v', long)]
@@ -37,24 +38,26 @@ fn main() -> io::Result<()> {
 
     let mut knowledge = Knowledge::new(args.num_letters);
 
-    let words_file = match File::open(&args.dictionary_path) {
-        Ok(f) => f,
-        Err(e) => {
-            println!("dictionary file {:?} could not be opened: {}", args.dictionary_path, e);
-            println!("to use a different file, specify it in command line arguments");
-            Args::command().print_help().unwrap();
-            println!();
-            std::process::exit(1);
-        }
-    };
-
     // Build a list of all words of the correct length. Use a BTreeSet because we want the words to
     // be in order (makes it easier to debug things when order is deterministic).
     let mut dictionary = BTreeSet::<String>::new();
-    for res in BufReader::new(words_file).lines() {
-        let word = res?;
-        if knowledge.check_word(&word, false) {
-            dictionary.insert(word);
+    for path in &args.dictionary_paths {
+        let words_file = match File::open(path) {
+            Ok(f) => f,
+            Err(e) => {
+                println!("Dictionary file {path:?} could not be opened: {e}");
+                println!("To use a different file, specify it in command line arguments:");
+                println!();
+                Args::command().print_help().unwrap();
+                println!();
+                std::process::exit(1);
+            }
+        };
+        for res in BufReader::new(words_file).lines() {
+            let word = res?;
+            if knowledge.check_word(&word, false) {
+                dictionary.insert(word);
+            }
         }
     }
 
